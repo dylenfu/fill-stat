@@ -1,0 +1,42 @@
+[log]
+    level = "debug"
+    development = true
+    disable_stacktrace = false
+    encoding = "console"
+    output_paths = ["/Users/fukun/projects/gohome/src/github.com/dylenfu/fill-stat/zap.log", "stderr"]
+    error_output_paths = ["/Users/fukun/projects/gohome/src/github.com/dylenfu/fill-stat/err.log"]
+    [log.encoder_config]
+	    message_key = "msg"
+	    level_key = "level"
+	    stacktrace_key = "trace"
+	    time_key = "ts"
+	    encode_level = "lowercase"
+	    encode_time = "iso8601"
+
+[mysql]
+    hostname = "127.0.0.1"
+    port = "3306"
+    user = "root"
+    password = "111111"
+    db_name = "fill_1.5"
+    table_prefix = "lpr_"
+    max_open_connections = 10
+    max_idle_connections = 2
+    conn_max_lifetime = 40
+    debug = false
+
+[item]
+    dbName = "v1.5"
+    start = 1
+    end  = 4302
+
+[market]
+    token_file = "/Users/fukun/projects/gohome/src/github.com/dylenfu/fill-stat/config/tokens.json"
+
+[redis]
+    host = "127.0.0.1"
+    port = "6379"
+    password = ""
+    idle_timeout = 120
+    max_idle = 5
+    max_active = 10
