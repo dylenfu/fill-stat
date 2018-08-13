@@ -40,6 +40,17 @@ func (s *RdsService) FindStatDataByToken(token string) (*StatFill, error) {
 	return &sd, err
 }
 
+func (s *RdsService) FindStatDataBySymbol(symbol string) (*StatFill, error) {
+	var (
+		sd  StatFill
+		err error
+	)
+	err = s.Db.Where("symbol = ?", symbol).First(&sd).Error
+
+	return &sd, err
+}
+
+
 func (s *RdsService) FindLatestId(dbName string) int {
 	var (
 		sd  StatFill

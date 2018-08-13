@@ -29,7 +29,7 @@ func (s *RdsService) FindRingMinedById(id int) (*RingMinedEvent, error) {
 		err   error
 	)
 
-	err = s.Db.Where("id=?", id).Where("status=?", 2).Where("fork = ?", false).First(&model).Error
+	err = s.Db.Where("id=?", id).Where("fork = ?", false).First(&model).Error
 
 	return &model, err
 }

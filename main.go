@@ -16,18 +16,22 @@ import (
 	"github.com/Loopring/extractor/extractor"
 	"github.com/Loopring/go-ethereum/common/hexutil"
 	"github.com/Loopring/relay-lib/types"
+	"github.com/Loopring/relay-lib/cache"
+	"os"
 )
 
 const (
 	LRC_SYMBOL = "LRC"
 	LRC_ADDR = "0xEF68e7C694F40c8202821eDF525dE3782458639f"
+	BLOCK_NUMBER_STR = "6137760"
 	)
 
 var (
-	rds *dao.RdsService
-	event extractor.EventData
+	rds            *dao.RdsService
+	ringMinedEvent extractor.EventData
+	transferEvent extractor.EventData
 	globalConfig *config.GlobalConfig
-	oldTokens = make(map[common.Hash]string)
+	oldTokens = make(map[common.Address]string)
 )
 
 func main() {
@@ -47,12 +51,14 @@ func main() {
 
 	// load mysql
 	rds = dao.NewDb(&globalConfig.Mysql)
+	cache.NewCache(globalConfig.Redis)
 
 	// load old tokens
-	oldTokens[common.HexToHash("0x2956356cD2a2bf3202F771F50D3D14A367b48070")] = "WETH_OLD"
-	oldTokens[common.HexToHash("0x86Fa049857E0209aa7D9e616F7eb3b3B78ECfdb0")] = "EOS"
-	oldTokens[common.HexToHash("0xf5B3b365FA319342e89a3Da71ba393E12D9F63c3")] = "FOO"
-	oldTokens[common.HexToHash("0xb5f64747127be058Ee7239b363269FC8cF3F4A87")] = "BAR"
+	oldTokens[common.HexToAddress("0x2956356cD2a2bf3202F771F50D3D14A367b48070")] = "WETH_OLD"
+	oldTokens[common.HexToAddress("0x86Fa049857E0209aa7D9e616F7eb3b3B78ECfdb0")] = "EOS"
+	oldTokens[common.HexToAddress("0xf5B3b365FA319342e89a3Da71ba393E12D9F63c3")] = "FOO"
+	oldTokens[common.HexToAddress("0xb5f64747127be058Ee7239b363269FC8cF3F4A87")] = "BAR"
+	oldTokens[common.HexToAddress("0xd2C6738D45b090ec05210fE8DCeEF4D8fc392892")] = "SET"
 
 	// load market util
 	util.Initialize(&globalConfig.Market)
@@ -64,39 +70,49 @@ func main() {
 		log.Fatalf("what fucking idiot err:%s", err.Error())
 	}
 	for name, e := range loopringaccessor.ProtocolImplAbi().Events {
-		if name != contract.EVENT_RING_MINED  {
+		if name != contract.EVENT_RING_MINED && name != contract.EVENT_TRANSFER  {
 			continue
 		}
-		event.Id = e.Id()
-		event.Name = e.Name
-		event.Abi = loopringaccessor.ProtocolImplAbi()
-		event.Event = &contract.RingMinedEvent{}
-		log.Infof("extractor,contract event name:%s -> key:%s", event.Name, event.Id.Hex())
-	}
 
+		switch name {
+		case contract.EVENT_RING_MINED:
+			ringMinedEvent.Id = e.Id()
+			ringMinedEvent.Name = e.Name
+			ringMinedEvent.Abi = loopringaccessor.ProtocolImplAbi()
+			ringMinedEvent.Event = &contract.RingMinedEvent{}
+
+		case contract.EVENT_TRANSFER:
+			transferEvent.Id = e.Id()
+			transferEvent.Name = e.Name
+			transferEvent.Abi = loopringaccessor.Erc20Abi()
+			transferEvent.Event = &contract.TransferEvent{}
+		}
+
+		log.Infof("extractor,contract event name:%s -> key:%s", ringMinedEvent.Name, ringMinedEvent.Id.Hex())
+	}
+	
 	stat(&globalConfig.Item)
 }
 
 func stat(item *config.ItemOption) {
-	start := rds.FindLatestId(item.DbName)
-	if start == 0 {
-		start = item.Start
-	} else {
-		start += 1
-	}
-	if item.End <= start {
-		log.Fatalf("fuck scanning end error")
-	}
-
-	log.Debugf("start:%d", start)
 	for i := item.Start; i<=item.End; i++ {
+		log.Debugf("find ringmined event:%d", i)
 		if ring, err := rds.FindRingMinedById(i); err != nil {
 			log.Errorf(err.Error())
 		} else {
 			fills := getFills(ring.TxHash)
 			for _, v := range fills {
-				single(v, item.DbName)
+				processSingleFill(v, item.DbName)
 			}
+		}
+	}
+}
+
+func oldStat(item *config.ItemOption) {
+	for i := item.Start; i<=item.End; i++ {
+		if fill, err := rds.FindFillById(i); err == nil {
+			log.Debugf("mysql fill id:%d", i)
+			processSingleFill(fill, item.DbName)
 		}
 	}
 }
@@ -111,13 +127,20 @@ func getFills(txhash string) []*dao.FillEvent {
 	retry := 10
 
 	for i:=0;i<retry;i++ {
-		if err := accessor.GetTransactionReceipt(&recipient, txhash, "latest"); err != nil {
+		if err := accessor.GetTransactionReceipt(&recipient, txhash, BLOCK_NUMBER_STR); err != nil {
 			log.Errorf("retry to get transaction recipient, retry count:%d", i+1)
-		}
-		if err := accessor.GetTransactionByHash(&tx, txhash, "latest"); err != nil {
-			log.Errorf("retry to get transaction, retry count:%d", i+1)
+		} else {
+			break
 		}
 	}
+	for i:=0; i<retry; i++ {
+		if err := accessor.GetTransactionByHash(&tx, txhash, BLOCK_NUMBER_STR); err != nil {
+			log.Errorf("retry to get transaction, retry count:%d", i+1)
+		} else {
+			break
+		}
+	}
+
 	if len(recipient.Logs) < 1 {
 		log.Errorf("can not get ringmined event")
 		return list
@@ -128,11 +151,12 @@ func getFills(txhash string) []*dao.FillEvent {
 		decodedValues [][]byte
 	)
 	for _, v := range recipient.Logs {
-		if common.HexToHash(v.Topics[0]) == event.Id {
+		if common.HexToHash(v.Topics[0]) == ringMinedEvent.Id {
 			evtLog = v
 		}
 	}
 	if len(evtLog.Data) < 100 {
+		log.Errorf("ring mined event data length invalid")
 		return list
 	}
 
@@ -141,9 +165,9 @@ func getFills(txhash string) []*dao.FillEvent {
 		decodeBytes := hexutil.MustDecode(topic)
 		decodedValues = append(decodedValues, decodeBytes)
 	}
-	event.Abi.UnpackEvent(event.Event, event.Name, data, decodedValues)
+	ringMinedEvent.Abi.UnpackEvent(ringMinedEvent.Event, ringMinedEvent.Name, data, decodedValues)
 
-	src := event.Event.(*contract.RingMinedEvent)
+	src := ringMinedEvent.Event.(*contract.RingMinedEvent)
 
 	_, fills, err := src.ConvertDown()
 	if err != nil {
@@ -162,14 +186,13 @@ func getFills(txhash string) []*dao.FillEvent {
 	return list
 }
 
-func single(fill *dao.FillEvent, dbName string) error {
+func processSingleFill(fill *dao.FillEvent, dbName string) error {
 	lrcFee, _ := new(big.Int).SetString(fill.LrcFee, 0)
 	lrcReward, _ := new(big.Int).SetString(fill.LrcReward, 0)
 	lrcTotal := new(big.Int).Add(lrcFee, lrcReward)
 
 	// tokenS
-	tokenS := common.HexToAddress(fill.TokenS)
-	symbolS, _ := util.GetSymbolWithAddress(tokenS)
+	symbolS := getSymbol(fill.TokenS)
 	amountS, _ := new(big.Int).SetString(fill.AmountS, 0)
 	splitS, _ := new(big.Int).SetString(fill.SplitS, 0)
 	amountS = new(big.Int).Add(amountS, splitS)
@@ -179,8 +202,7 @@ func single(fill *dao.FillEvent, dbName string) error {
 	setStat(fill.TokenS, symbolS, dbName, amountS.String(), fill.TxHash, fill.ID)
 
 	// tokenB
-	tokenB := common.HexToAddress(fill.TokenB)
-	symbolB, _ := util.GetSymbolWithAddress(tokenB)
+	symbolB := getSymbol(fill.TokenB)
 	amountB, _ := new(big.Int).SetString(fill.AmountB, 0)
 	splitB, _ := new(big.Int).SetString(fill.SplitB, 0)
 	amountB = new(big.Int).Add(amountB, splitB)
@@ -194,11 +216,12 @@ func single(fill *dao.FillEvent, dbName string) error {
 		setStat(LRC_ADDR, LRC_SYMBOL, dbName, lrcTotal.String(), fill.TxHash, fill.ID)
 	}
 
+	log.Debugf("txhash:%s fill_%d orderhash:%s", fill.TxHash, fill.FillIndex, fill.OrderHash)
 	return nil
 }
 
 func setStat(token, symbol, dbName, addAmount, latestTxHash string, latestFillId int) {
-	data, err := rds.FindStatDataByToken(token)
+	data, err := rds.FindStatDataBySymbol(symbol)
 	if err != nil {
 		data.Amount = addAmount
 		data.LatestId = latestFillId
@@ -236,6 +259,10 @@ func readableAmount(token,amount string) string {
 	decimal := big.NewInt(1e18)
 	if token, err := util.AddressToToken(addr); err == nil {
 		decimal = token.Decimals
+		if token.Symbol == "FUN" {
+			log.Debugf("decimal ", decimal.String())
+			os.Exit(1)
+		}
 	}
 	sum, _ := new(big.Int).SetString(amount, 0)
 	readableAmount := new(big.Rat).SetFrac(sum, decimal).FloatString(2)
@@ -245,11 +272,7 @@ func readableAmount(token,amount string) string {
 func setAllReadbleAmount() {
 	list, _ := rds.GetAllStatData()
 	for _, v := range list {
-		if v.Symbol == "" {
-			if symbol, ok := oldTokens[common.HexToHash(v.Token)]; ok {
-				v.Symbol = symbol
-			}
-		}
+		v.Symbol = getSymbol(v.Token)
 		v.ReadableAmount = readableAmount(v.Token, v.Amount)
 		rds.Save(v)
 	}
@@ -283,4 +306,16 @@ func setTxInfo(tx *ethtyp.Transaction, gasUsed, blockTime *big.Int, methodName s
 	txinfo.Identify = methodName
 
 	return txinfo
+}
+
+func getSymbol(token string) string {
+	symbol, _ := util.GetSymbolWithAddress(common.HexToAddress(token))
+	if len(symbol) > 1 {
+		return symbol
+	}
+	if symbol, ok := oldTokens[common.HexToAddress(token)]; ok {
+		return symbol
+	} else {
+		return ""
+	}
 }
