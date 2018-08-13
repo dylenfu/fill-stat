@@ -40,12 +40,12 @@ func (s *RdsService) FindStatDataByToken(token string) (*StatData, error) {
 	return &sd, err
 }
 
-func (s *RdsService) FindLatestId() int {
+func (s *RdsService) FindLatestId(dbName string) int {
 	var (
 		sd   StatData
 		err  error
 	)
-	err = s.Db.Where("id > ?", 0).Order("latest_id DESC").First(&sd).Error
+	err = s.Db.Where("latest_db=?", dbName).Where("id > ?", 0).Order("latest_id DESC").First(&sd).Error
 
 	if err != nil {
 		return 0

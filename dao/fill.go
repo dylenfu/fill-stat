@@ -20,6 +20,7 @@ package dao
 
 import (
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/Loopring/relay-lib/types"
 )
 
 type FillEvent struct {
@@ -49,6 +50,33 @@ type FillEvent struct {
 	Fork            bool   `gorm:"column:fork"`
 	Side            string `gorm:"column:side" json:"side"`
 	OrderType       string `gorm:"column:order_type" json:"orderType"`
+}
+
+func (f *FillEvent) ConvertDown(src *types.OrderFilledEvent) error {
+	f.AmountS = src.AmountS.String()
+	f.AmountB = src.AmountB.String()
+	f.LrcReward = src.LrcReward.String()
+	f.LrcFee = src.LrcFee.String()
+	f.SplitS = src.SplitS.String()
+	f.SplitB = src.SplitB.String()
+	f.Protocol = src.Protocol.Hex()
+	f.DelegateAddress = src.DelegateAddress.Hex()
+	f.RingIndex = src.RingIndex.Int64()
+	f.BlockNumber = src.BlockNumber.Int64()
+	f.CreateTime = src.BlockTime
+	f.RingHash = src.Ringhash.Hex()
+	f.TxHash = src.TxHash.Hex()
+	f.PreOrderHash = src.PreOrderHash.Hex()
+	f.NextOrderHash = src.NextOrderHash.Hex()
+	f.OrderHash = src.OrderHash.Hex()
+	f.TokenS = src.TokenS.Hex()
+	f.TokenB = src.TokenB.Hex()
+	f.Owner = src.Owner.Hex()
+	f.FillIndex = src.FillIndex.Int64()
+	f.LogIndex = src.TxLogIndex
+	f.Market = src.Market
+
+	return nil
 }
 
 func (s *RdsService) FindFillById(id int) (*FillEvent, error) {

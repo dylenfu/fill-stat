@@ -10,6 +10,8 @@ import (
 	util "github.com/Loopring/relay-lib/marketutil"
 	"go.uber.org/zap"
 	"github.com/Loopring/relay-lib/cache/redis"
+	"github.com/Loopring/relay-lib/eth/accessor"
+	"github.com/Loopring/relay-lib/eth/loopringaccessor"
 )
 
 func LoadConfig() *GlobalConfig {
@@ -34,6 +36,8 @@ type GlobalConfig struct {
 	Redis            redis.RedisOptions
 	Market           util.MarketOptions
 	Item 			 ItemOption
+	Accessor         accessor.AccessorOptions
+	LoopringProtocol loopringaccessor.LoopringProtocolOptions
 }
 
 type ItemOption struct {
