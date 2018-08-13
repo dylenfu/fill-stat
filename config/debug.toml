@@ -18,15 +18,15 @@
     port = "3306"
     user = "root"
     password = "111111"
-    db_name = "fill_1.5"
+    db_name = "fill_cluster"
     table_prefix = "lpr_"
     max_open_connections = 10
     max_idle_connections = 2
     conn_max_lifetime = 40
-    debug = false
+    debug = true
 
 [item]
-    dbName = "v1.5"
+    dbName = "cluster"
     start = 1
     end  = 4302
 

@@ -43,7 +43,8 @@ func NewDb(options *libdao.MysqlOptions) *RdsService {
 	tables := []interface{}{}
 	// create tables if not exists
 	tables = append(tables, &FillEvent{})
-	tables = append(tables, &StatData{})
+	tables = append(tables, &StatFill{})
+	tables = append(tables, &RingMinedEvent{})
 
 	s.SetTables(tables)
 	if err := s.CreateTables(); err != nil {

@@ -28,7 +28,6 @@ var (
 	event extractor.EventData
 	globalConfig *config.GlobalConfig
 	oldTokens = make(map[common.Hash]string)
-	dbName = "v1.5"
 )
 
 func main() {
@@ -49,20 +48,20 @@ func main() {
 	// load mysql
 	rds = dao.NewDb(&globalConfig.Mysql)
 
-	// load market util
-	util.Initialize(&globalConfig.Market)
-
 	// load old tokens
 	oldTokens[common.HexToHash("0x2956356cD2a2bf3202F771F50D3D14A367b48070")] = "WETH_OLD"
 	oldTokens[common.HexToHash("0x86Fa049857E0209aa7D9e616F7eb3b3B78ECfdb0")] = "EOS"
 	oldTokens[common.HexToHash("0xf5B3b365FA319342e89a3Da71ba393E12D9F63c3")] = "FOO"
 	oldTokens[common.HexToHash("0xb5f64747127be058Ee7239b363269FC8cF3F4A87")] = "BAR"
 
+	// load market util
+	util.Initialize(&globalConfig.Market)
+
 	// load loopring contract accessor
 	err := accessor.Initialize(globalConfig.Accessor)
 	err = loopringaccessor.Initialize(globalConfig.LoopringProtocol)
 	if nil != err {
-		log.Fatalf("err:%s", err.Error())
+		log.Fatalf("what fucking idiot err:%s", err.Error())
 	}
 	for name, e := range loopringaccessor.ProtocolImplAbi().Events {
 		if name != contract.EVENT_RING_MINED  {
@@ -72,12 +71,8 @@ func main() {
 		event.Name = e.Name
 		event.Abi = loopringaccessor.ProtocolImplAbi()
 		event.Event = &contract.RingMinedEvent{}
-
 		log.Infof("extractor,contract event name:%s -> key:%s", event.Name, event.Id.Hex())
 	}
-
-	latestId := rds.FindLatestId(dbName)
-	log.Debugf("latestId:%d", latestId)
 
 	stat(&globalConfig.Item)
 }
@@ -89,6 +84,10 @@ func stat(item *config.ItemOption) {
 	} else {
 		start += 1
 	}
+	if item.End <= start {
+		log.Fatalf("fuck scanning end error")
+	}
+
 	log.Debugf("start:%d", start)
 	for i := item.Start; i<=item.End; i++ {
 		if ring, err := rds.FindRingMinedById(i); err != nil {
@@ -96,7 +95,7 @@ func stat(item *config.ItemOption) {
 		} else {
 			fills := getFills(ring.TxHash)
 			for _, v := range fills {
-				single(v)
+				single(v, item.DbName)
 			}
 		}
 	}
@@ -128,6 +127,15 @@ func getFills(txhash string) []*dao.FillEvent {
 		evtLog ethtyp.Log
 		decodedValues [][]byte
 	)
+	for _, v := range recipient.Logs {
+		if common.HexToHash(v.Topics[0]) == event.Id {
+			evtLog = v
+		}
+	}
+	if len(evtLog.Data) < 100 {
+		return list
+	}
+
 	data := hexutil.MustDecode(evtLog.Data)
 	for _, topic := range evtLog.Topics {
 		decodeBytes := hexutil.MustDecode(topic)
@@ -154,7 +162,7 @@ func getFills(txhash string) []*dao.FillEvent {
 	return list
 }
 
-func single(fill *dao.FillEvent) error {
+func single(fill *dao.FillEvent, dbName string) error {
 	lrcFee, _ := new(big.Int).SetString(fill.LrcFee, 0)
 	lrcReward, _ := new(big.Int).SetString(fill.LrcReward, 0)
 	lrcTotal := new(big.Int).Add(lrcFee, lrcReward)
@@ -232,6 +240,19 @@ func readableAmount(token,amount string) string {
 	sum, _ := new(big.Int).SetString(amount, 0)
 	readableAmount := new(big.Rat).SetFrac(sum, decimal).FloatString(2)
 	return readableAmount
+}
+
+func setAllReadbleAmount() {
+	list, _ := rds.GetAllStatData()
+	for _, v := range list {
+		if v.Symbol == "" {
+			if symbol, ok := oldTokens[common.HexToHash(v.Token)]; ok {
+				v.Symbol = symbol
+			}
+		}
+		v.ReadableAmount = readableAmount(v.Token, v.Amount)
+		rds.Save(v)
+	}
 }
 
 func setTxInfo(tx *ethtyp.Transaction, gasUsed, blockTime *big.Int, methodName string) types.TxInfo {

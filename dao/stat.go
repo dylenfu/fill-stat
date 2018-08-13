@@ -18,7 +18,7 @@
 
 package dao
 
-type StatData struct {
+type StatFill struct {
 	ID              int    `gorm:"column:id;primary_key;"`
 	Token 			string 	`gorm:"column:token;type:varchar(42)"`
 	Symbol          string `gorm:"column:symbol;type:varchar(42)"`
@@ -30,10 +30,10 @@ type StatData struct {
 	LatestId 		int    `gorm:"column:latest_id"`
 }
 
-func (s *RdsService) FindStatDataByToken(token string) (*StatData, error) {
+func (s *RdsService) FindStatDataByToken(token string) (*StatFill, error) {
 	var (
-		sd   StatData
-		err  error
+		sd  StatFill
+		err error
 	)
 	err = s.Db.Where("token = ?", token).First(&sd).Error
 
@@ -42,8 +42,8 @@ func (s *RdsService) FindStatDataByToken(token string) (*StatData, error) {
 
 func (s *RdsService) FindLatestId(dbName string) int {
 	var (
-		sd   StatData
-		err  error
+		sd  StatFill
+		err error
 	)
 	err = s.Db.Where("latest_db=?", dbName).Where("id > ?", 0).Order("latest_id DESC").First(&sd).Error
 
@@ -54,12 +54,12 @@ func (s *RdsService) FindLatestId(dbName string) int {
 }
 
 func (s *RdsService) UpdateAmount(token,totalAmount string) error {
-	return s.Db.Model(&StatData{}).Where("token", token).Update("amount", totalAmount).Error
+	return s.Db.Model(&StatFill{}).Where("token", token).Update("amount", totalAmount).Error
 }
 
-func (s *RdsService) GetAllStatData() ([]StatData, error) {
+func (s *RdsService) GetAllStatData() ([]StatFill, error) {
 	var (
-		list []StatData
+		list []StatFill
 		err error
 	)
 
