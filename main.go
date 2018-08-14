@@ -90,7 +90,7 @@ func main() {
 
 		log.Infof("extractor,contract event name:%s -> key:%s", ringMinedEvent.Name, ringMinedEvent.Id.Hex())
 	}
-	
+
 	stat(&globalConfig.Item)
 }
 

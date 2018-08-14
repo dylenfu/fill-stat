@@ -36,7 +36,7 @@
 [item]
     dbName = "v1.5"
     start = 4266
-    end  = 4391
+    end  = 4379
 
 [market]
     token_file = "/Users/fukun/projects/gohome/src/github.com/dylenfu/fill-stat/config/tokens.json"
