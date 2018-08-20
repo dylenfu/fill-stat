@@ -50,7 +50,6 @@ func (s *RdsService) FindStatDataBySymbol(symbol string) (*StatData, error) {
 	return &sd, err
 }
 
-
 func (s *RdsService) FindLatestId(dbName string) int {
 	var (
 		sd  StatData

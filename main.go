@@ -8,7 +8,6 @@ import (
 	"github.com/Loopring/relay-lib/log"
 	"github.com/ethereum/go-ethereum/common"
 	"math/big"
-	"strings"
 	"github.com/Loopring/relay-lib/eth/accessor"
 	"github.com/Loopring/relay-lib/eth/loopringaccessor"
 	ethtyp "github.com/Loopring/relay-lib/eth/types"
@@ -17,7 +16,6 @@ import (
 	"github.com/Loopring/go-ethereum/common/hexutil"
 	"github.com/Loopring/relay-lib/types"
 	"github.com/Loopring/relay-lib/cache"
-	"os"
 )
 
 const (
@@ -110,15 +108,6 @@ func stat(item *config.ItemOption) {
 	}
 }
 
-func oldStat(item *config.ItemOption) {
-	for i := item.Start; i<=item.End; i++ {
-		if fill, err := rds.FindFillById(i); err == nil {
-			log.Debugf("mysql fill id:%d", i)
-			processSingleFill(fill, item.DbName)
-		}
-	}
-}
-
 func getTransfer(txhash string) []*types.TransferEvent {
 	var (
 		recipient ethtyp.TransactionReceipt
@@ -150,7 +139,6 @@ func getTransfer(txhash string) []*types.TransferEvent {
 
 	for _, v := range recipient.Logs {
 		if common.HexToHash(v.Topics[0]).Hex() != transferEvent.Id.Hex() {
-			log.Debugf("topic[0]:%s, transferId:%s", v.Topics[0], transferEvent.Id.Hex())
 			continue
 		}
 
@@ -172,6 +160,138 @@ func getTransfer(txhash string) []*types.TransferEvent {
 	}
 
 	return list
+}
+
+func processTransferList(list []*types.TransferEvent, dbName string) error {
+	type stdata struct {
+		symbol string
+		token string
+		txhash string
+		amount *big.Int
+	}
+	stmp := make(map[string]*stdata)
+	symbolCnt := 0
+	for _, v := range list {
+		symbol := getSymbol(v.Protocol.Hex())
+		if st, ok := stmp[symbol]; !ok {
+			st = &stdata{}
+			st.symbol = symbol
+			st.txhash = v.TxHash.Hex()
+			st.token = v.Protocol.Hex()
+			st.amount = v.Amount
+			stmp[symbol] = st
+
+			symbolCnt += 1
+		} else {
+			st.amount = new(big.Int).Add(st.amount, v.Amount)
+		}
+	}
+
+	for _, v := range stmp {
+		if v.symbol == LRC_SYMBOL && symbolCnt > 2 {
+			setTransferStat(v.token, v.symbol, v.amount.String(), v.txhash,false)
+		} else {
+			setTransferStat(v.token, v.symbol, v.amount.String(), v.txhash,true)
+		}
+	}
+	return nil
+}
+
+func setTransferStat(token, symbol, addAmount, latestTxHash string, needAddTxCount bool) {
+	data, err := rds.FindStatDataBySymbol(symbol)
+	if err != nil {
+		data.Amount = addAmount
+		data.Token = token
+		data.Symbol = symbol
+		if needAddTxCount {
+			data.TxCount = 1
+		}
+		data.LatestTxHash = latestTxHash
+		data.ReadableAmount = readableAmount(token, data.Amount)
+		if err := rds.Add(&data); err != nil {
+			log.Errorf(err.Error())
+		} else {
+			log.Debugf("txhash:%s, insert symbol:%s, totalAmount:%s", latestTxHash, symbol,  data.Amount)
+		}
+	} else {
+		current, _ := new(big.Int).SetString(data.Amount, 0)
+		added, _ := new(big.Int).SetString(addAmount, 0)
+		data.Amount = new(big.Int).Add(current, added).String()
+		if data.LatestTxHash != latestTxHash && needAddTxCount {
+			data.TxCount += 1
+		}
+		data.LatestTxHash = latestTxHash
+		data.ReadableAmount = readableAmount(token, data.Amount)
+		if err := rds.Save(data); err != nil {
+			log.Errorf(err.Error())
+		} else {
+			log.Debugf("txhash:%s, update symbol:%s, totalAmount:%s", latestTxHash, symbol,  data.Amount)
+		}
+	}
+}
+
+func readableAmount(token,amount string) string {
+	addr := common.HexToAddress(token)
+	decimal := big.NewInt(1e18)
+	if token, err := util.AddressToToken(addr); err == nil {
+		decimal = token.Decimals
+	}
+	sum, _ := new(big.Int).SetString(amount, 0)
+	readableAmount := new(big.Rat).SetFrac(sum, decimal).FloatString(2)
+	return readableAmount
+}
+
+func setTxInfo(tx *ethtyp.Transaction, gasUsed, blockTime *big.Int, methodName string) types.TxInfo {
+	var txinfo types.TxInfo
+
+	txinfo.Protocol = common.HexToAddress(tx.To)
+	txinfo.From = common.HexToAddress(tx.From)
+	txinfo.To = common.HexToAddress(tx.To)
+
+	if impl, ok := loopringaccessor.ProtocolAddresses()[txinfo.To]; ok {
+		txinfo.DelegateAddress = impl.DelegateAddress
+	} else {
+		txinfo.DelegateAddress = types.NilAddress
+	}
+
+	txinfo.BlockNumber = tx.BlockNumber.BigInt()
+	txinfo.BlockTime = blockTime.Int64()
+	txinfo.BlockHash = common.HexToHash(tx.BlockHash)
+	txinfo.TxHash = common.HexToHash(tx.Hash)
+	txinfo.TxIndex = tx.TransactionIndex.Int64()
+	txinfo.Value = tx.Value.BigInt()
+
+	txinfo.GasLimit = tx.Gas.BigInt()
+	txinfo.GasUsed = gasUsed
+	txinfo.GasPrice = tx.GasPrice.BigInt()
+	txinfo.Nonce = tx.Nonce.BigInt()
+
+	txinfo.Identify = methodName
+
+	return txinfo
+}
+
+func getSymbol(token string) string {
+	symbol, _ := util.GetSymbolWithAddress(common.HexToAddress(token))
+	if len(symbol) > 1 {
+		return symbol
+	}
+	if symbol, ok := oldTokens[common.HexToAddress(token)]; ok {
+		return symbol
+	} else {
+		return ""
+	}
+}
+
+/*
+
+func oldStat(item *config.ItemOption) {
+	for i := item.Start; i<=item.End; i++ {
+		if fill, err := rds.FindFillById(i); err == nil {
+			log.Debugf("mysql fill id:%d", i)
+			processSingleFill(fill, item.DbName)
+		}
+	}
 }
 
 func getFills(txhash string) []*dao.FillEvent {
@@ -243,41 +363,6 @@ func getFills(txhash string) []*dao.FillEvent {
 	return list
 }
 
-func processTransferList(list []*types.TransferEvent, dbName string) error {
-	type stdata struct {
-		symbol string
-		token string
-		txhash string
-		amount *big.Int
-	}
-	stmp := make(map[string]*stdata)
-	symbolCnt := 0
-	for _, v := range list {
-		symbol := getSymbol(v.Protocol.Hex())
-		if st, ok := stmp[symbol]; !ok {
-			st = &stdata{}
-			st.symbol = symbol
-			st.txhash = v.TxHash.Hex()
-			st.token = v.Protocol.Hex()
-			st.amount = v.Amount
-			stmp[symbol] = st
-
-			symbolCnt += 1
-		} else {
-			st.amount = new(big.Int).Add(st.amount, v.Amount)
-		}
-	}
-
-	for _, v := range stmp {
-		if v.symbol == LRC_SYMBOL && symbolCnt > 2 {
-			log.Debugf("lrc gas or other")
-		} else {
-			setStat(v.token, v.symbol, dbName, v.amount.String(), v.txhash,1)
-		}
-	}
-	return nil
-}
-
 func processSingleFill(fill *dao.FillEvent, dbName string) error {
 	lrcFee, _ := new(big.Int).SetString(fill.LrcFee, 0)
 	lrcReward, _ := new(big.Int).SetString(fill.LrcReward, 0)
@@ -347,21 +432,6 @@ func setStat(token, symbol, dbName, addAmount, latestTxHash string, latestFillId
 	}
 }
 
-func readableAmount(token,amount string) string {
-	addr := common.HexToAddress(token)
-	decimal := big.NewInt(1e18)
-	if token, err := util.AddressToToken(addr); err == nil {
-		decimal = token.Decimals
-		if token.Symbol == "FUN" {
-			log.Debugf("decimal ", decimal.String())
-			os.Exit(1)
-		}
-	}
-	sum, _ := new(big.Int).SetString(amount, 0)
-	readableAmount := new(big.Rat).SetFrac(sum, decimal).FloatString(2)
-	return readableAmount
-}
-
 func setAllReadbleAmount() {
 	list, _ := rds.GetAllStatData()
 	for _, v := range list {
@@ -371,44 +441,4 @@ func setAllReadbleAmount() {
 	}
 }
 
-func setTxInfo(tx *ethtyp.Transaction, gasUsed, blockTime *big.Int, methodName string) types.TxInfo {
-	var txinfo types.TxInfo
-
-	txinfo.Protocol = common.HexToAddress(tx.To)
-	txinfo.From = common.HexToAddress(tx.From)
-	txinfo.To = common.HexToAddress(tx.To)
-
-	if impl, ok := loopringaccessor.ProtocolAddresses()[txinfo.To]; ok {
-		txinfo.DelegateAddress = impl.DelegateAddress
-	} else {
-		txinfo.DelegateAddress = types.NilAddress
-	}
-
-	txinfo.BlockNumber = tx.BlockNumber.BigInt()
-	txinfo.BlockTime = blockTime.Int64()
-	txinfo.BlockHash = common.HexToHash(tx.BlockHash)
-	txinfo.TxHash = common.HexToHash(tx.Hash)
-	txinfo.TxIndex = tx.TransactionIndex.Int64()
-	txinfo.Value = tx.Value.BigInt()
-
-	txinfo.GasLimit = tx.Gas.BigInt()
-	txinfo.GasUsed = gasUsed
-	txinfo.GasPrice = tx.GasPrice.BigInt()
-	txinfo.Nonce = tx.Nonce.BigInt()
-
-	txinfo.Identify = methodName
-
-	return txinfo
-}
-
-func getSymbol(token string) string {
-	symbol, _ := util.GetSymbolWithAddress(common.HexToAddress(token))
-	if len(symbol) > 1 {
-		return symbol
-	}
-	if symbol, ok := oldTokens[common.HexToAddress(token)]; ok {
-		return symbol
-	} else {
-		return ""
-	}
-}
+*/
