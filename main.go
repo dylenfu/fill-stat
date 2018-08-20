@@ -69,17 +69,17 @@ func main() {
 	if nil != err {
 		log.Fatalf("what fucking idiot err:%s", err.Error())
 	}
-	for name, e := range loopringaccessor.ProtocolImplAbi().Events {
-		if name != contract.EVENT_RING_MINED && name != contract.EVENT_TRANSFER  {
+	for name, e := range loopringaccessor.Erc20Abi().Events {
+		if name != contract.EVENT_TRANSFER  {
 			continue
 		}
 
 		switch name {
-		case contract.EVENT_RING_MINED:
-			ringMinedEvent.Id = e.Id()
-			ringMinedEvent.Name = e.Name
-			ringMinedEvent.Abi = loopringaccessor.ProtocolImplAbi()
-			ringMinedEvent.Event = &contract.RingMinedEvent{}
+		//case contract.EVENT_RING_MINED:
+		//	ringMinedEvent.Id = e.Id()
+		//	ringMinedEvent.Name = e.Name
+		//	ringMinedEvent.Abi = loopringaccessor.ProtocolImplAbi()
+		//	ringMinedEvent.Event = &contract.RingMinedEvent{}
 
 		case contract.EVENT_TRANSFER:
 			transferEvent.Id = e.Id()
@@ -88,7 +88,7 @@ func main() {
 			transferEvent.Event = &contract.TransferEvent{}
 		}
 
-		log.Infof("extractor,contract event name:%s -> key:%s", ringMinedEvent.Name, ringMinedEvent.Id.Hex())
+		log.Infof("extractor,contract event name:%s -> key:%s", transferEvent.Name, transferEvent.Id.Hex())
 	}
 
 	stat(&globalConfig.Item)
@@ -100,10 +100,12 @@ func stat(item *config.ItemOption) {
 		if ring, err := rds.FindRingMinedById(i); err != nil {
 			log.Errorf(err.Error())
 		} else {
-			fills := getFills(ring.TxHash)
-			for _, v := range fills {
-				processSingleFill(v, item.DbName)
-			}
+			//fills := getFills(ring.TxHash)
+			evts := getTransfer(ring.TxHash)
+			processTransferList(evts, item.DbName)
+			//for _, v := range evts {
+			//	processSingleFill(v, item.DbName)
+			//}
 		}
 	}
 }
@@ -115,6 +117,61 @@ func oldStat(item *config.ItemOption) {
 			processSingleFill(fill, item.DbName)
 		}
 	}
+}
+
+func getTransfer(txhash string) []*types.TransferEvent {
+	var (
+		recipient ethtyp.TransactionReceipt
+		tx ethtyp.Transaction
+		list []*types.TransferEvent
+	)
+
+	retry := 10
+
+	for i:=0;i<retry;i++ {
+		if err := accessor.GetTransactionReceipt(&recipient, txhash, BLOCK_NUMBER_STR); err != nil {
+			log.Errorf("retry to get transaction recipient, retry count:%d", i+1)
+		} else {
+			break
+		}
+	}
+	for i:=0; i<retry; i++ {
+		if err := accessor.GetTransactionByHash(&tx, txhash, BLOCK_NUMBER_STR); err != nil {
+			log.Errorf("retry to get transaction, retry count:%d", i+1)
+		} else {
+			break
+		}
+	}
+
+	if len(recipient.Logs) < 1 {
+		log.Debugf("cann't get ringmined event or tx is failed")
+		return list
+	}
+
+	for _, v := range recipient.Logs {
+		if common.HexToHash(v.Topics[0]).Hex() != transferEvent.Id.Hex() {
+			log.Debugf("topic[0]:%s, transferId:%s", v.Topics[0], transferEvent.Id.Hex())
+			continue
+		}
+
+		data := hexutil.MustDecode(v.Data)
+		var decodedValues [][]byte
+		for _, topic := range v.Topics {
+			decodeBytes := hexutil.MustDecode(topic)
+			decodedValues = append(decodedValues, decodeBytes)
+		}
+		transferEvent.Abi.UnpackEvent(transferEvent.Event, transferEvent.Name, data, decodedValues)
+
+		src := transferEvent.Event.(*contract.TransferEvent)
+
+		transfer := src.ConvertDown()
+		txinfo := setTxInfo(&tx, recipient.GasUsed.BigInt(), big.NewInt(0), "submitRing")
+		transfer.TxInfo = txinfo
+		transfer.Protocol = common.HexToAddress(v.Address)
+		list = append(list, transfer)
+	}
+
+	return list
 }
 
 func getFills(txhash string) []*dao.FillEvent {
@@ -186,6 +243,41 @@ func getFills(txhash string) []*dao.FillEvent {
 	return list
 }
 
+func processTransferList(list []*types.TransferEvent, dbName string) error {
+	type stdata struct {
+		symbol string
+		token string
+		txhash string
+		amount *big.Int
+	}
+	stmp := make(map[string]*stdata)
+	symbolCnt := 0
+	for _, v := range list {
+		symbol := getSymbol(v.Protocol.Hex())
+		if st, ok := stmp[symbol]; !ok {
+			st = &stdata{}
+			st.symbol = symbol
+			st.txhash = v.TxHash.Hex()
+			st.token = v.Protocol.Hex()
+			st.amount = v.Amount
+			stmp[symbol] = st
+
+			symbolCnt += 1
+		} else {
+			st.amount = new(big.Int).Add(st.amount, v.Amount)
+		}
+	}
+
+	for _, v := range stmp {
+		if v.symbol == LRC_SYMBOL && symbolCnt > 2 {
+			log.Debugf("lrc gas or other")
+		} else {
+			setStat(v.token, v.symbol, dbName, v.amount.String(), v.txhash,1)
+		}
+	}
+	return nil
+}
+
 func processSingleFill(fill *dao.FillEvent, dbName string) error {
 	lrcFee, _ := new(big.Int).SetString(fill.LrcFee, 0)
 	lrcReward, _ := new(big.Int).SetString(fill.LrcReward, 0)
@@ -228,6 +320,7 @@ func setStat(token, symbol, dbName, addAmount, latestTxHash string, latestFillId
 		data.LatestDb = dbName
 		data.Token = token
 		data.Symbol = symbol
+		data.TxCount = 1
 		data.LatestTxHash = latestTxHash
 		data.ReadableAmount = readableAmount(token, data.Amount)
 		if err := rds.Add(&data); err != nil {
