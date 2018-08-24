@@ -21,6 +21,12 @@
 			"revisionTime": "2018-08-08T09:26:43Z"
 		},
 		{
+			"checksumSHA1": "ky+cjhX3iurUr40tbSS8q4dtCxc=",
+			"path": "github.com/Loopring/go-ethereum/common/hexutil",
+			"revision": "2688dab48c9b8ae71b8d95c7678817eaa17f2b53",
+			"revisionTime": "2018-05-14T10:14:17Z"
+		},
+		{
 			"checksumSHA1": "S7XTs/kDwi8CTUEsecb0d4L8Ku4=",
 			"path": "github.com/Loopring/relay-lib/cache",
 			"revision": "505032a0737bf9d1007ff782db67a4e41eac71f7",
