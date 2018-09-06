@@ -16,6 +16,7 @@ import (
 	"github.com/Loopring/go-ethereum/common/hexutil"
 	"github.com/Loopring/relay-lib/types"
 	"github.com/Loopring/relay-lib/cache"
+	"fmt"
 )
 
 const (
@@ -89,7 +90,35 @@ func main() {
 		log.Infof("extractor,contract event name:%s -> key:%s", transferEvent.Name, transferEvent.Id.Hex())
 	}
 
-	stat(&globalConfig.Item)
+	// stat(&globalConfig.Item)
+	fullFillRingMinedata()
+}
+
+// id <= 688, status, gas,gasused,gasprice
+func fullFillRingMinedata() {
+	for i:=1;i<=688;i++ {
+		ring, err := rds.FindRingMinedById(i)
+		if  err != nil {
+			log.Debugf("find ringMined event failed, id:%d", i)
+			continue
+		}
+
+		tx, receipt, err := getTxByHash(ring.TxHash)
+		if err != nil {
+			log.Debugf(err.Error())
+			continue
+		}
+
+		if receipt.StatusInvalid() {
+			ring.Status = uint8(types.TX_STATUS_FAILED)
+		}
+		ring.GasLimit = tx.Gas.BigInt().String()
+		ring.GasPrice = tx.GasPrice.BigInt().String()
+		ring.GasUsed = receipt.GasUsed.BigInt().String()
+
+		log.Debugf("txhash:%s status:%d gaslimit:%s, gasused:%s, gasprice:%s", ring.TxHash, ring.Status, ring.GasLimit, ring.GasUsed, ring.GasPrice)
+		rds.Save(ring)
+	}
 }
 
 func stat(item *config.ItemOption) {
@@ -110,9 +139,46 @@ func stat(item *config.ItemOption) {
 
 func getTransfer(txhash string) []*types.TransferEvent {
 	var (
+		//recipient ethtyp.TransactionReceipt
+		//tx ethtyp.Transaction
+		list []*types.TransferEvent
+	)
+
+	tx, recipient, err := getTxByHash(txhash)
+	if err != nil {
+		log.Debugf(err.Error())
+		return list
+	}
+
+	for _, v := range recipient.Logs {
+		if common.HexToHash(v.Topics[0]).Hex() != transferEvent.Id.Hex() {
+			continue
+		}
+
+		data := hexutil.MustDecode(v.Data)
+		var decodedValues [][]byte
+		for _, topic := range v.Topics {
+			decodeBytes := hexutil.MustDecode(topic)
+			decodedValues = append(decodedValues, decodeBytes)
+		}
+		transferEvent.Abi.UnpackEvent(transferEvent.Event, transferEvent.Name, data, decodedValues)
+
+		src := transferEvent.Event.(*contract.TransferEvent)
+
+		transfer := src.ConvertDown()
+		txinfo := setTxInfo(tx, recipient.GasUsed.BigInt(), big.NewInt(0), "submitRing")
+		transfer.TxInfo = txinfo
+		transfer.Protocol = common.HexToAddress(v.Address)
+		list = append(list, transfer)
+	}
+
+	return list
+}
+
+func getTxByHash(txhash string) (*ethtyp.Transaction,*ethtyp.TransactionReceipt, error) {
+	var (
 		recipient ethtyp.TransactionReceipt
 		tx ethtyp.Transaction
-		list []*types.TransferEvent
 	)
 
 	retry := 10
@@ -133,33 +199,10 @@ func getTransfer(txhash string) []*types.TransferEvent {
 	}
 
 	if len(recipient.Logs) < 1 {
-		log.Debugf("cann't get ringmined event or tx is failed")
-		return list
+		return nil, nil, fmt.Errorf("cann't get ringmined event or tx is failed")
 	}
 
-	for _, v := range recipient.Logs {
-		if common.HexToHash(v.Topics[0]).Hex() != transferEvent.Id.Hex() {
-			continue
-		}
-
-		data := hexutil.MustDecode(v.Data)
-		var decodedValues [][]byte
-		for _, topic := range v.Topics {
-			decodeBytes := hexutil.MustDecode(topic)
-			decodedValues = append(decodedValues, decodeBytes)
-		}
-		transferEvent.Abi.UnpackEvent(transferEvent.Event, transferEvent.Name, data, decodedValues)
-
-		src := transferEvent.Event.(*contract.TransferEvent)
-
-		transfer := src.ConvertDown()
-		txinfo := setTxInfo(&tx, recipient.GasUsed.BigInt(), big.NewInt(0), "submitRing")
-		transfer.TxInfo = txinfo
-		transfer.Protocol = common.HexToAddress(v.Address)
-		list = append(list, transfer)
-	}
-
-	return list
+	return &tx, &recipient, nil
 }
 
 func processTransferList(list []*types.TransferEvent, dbName string) error {
