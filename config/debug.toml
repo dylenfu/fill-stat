@@ -35,14 +35,14 @@
 
 [item]
     dbName = "v1.5"
-    start = 4434
-    end  = 4584
+    start = 4585
+    end  = 5379
 
 [market]
     token_file = "/Users/fukun/projects/gohome/src/github.com/dylenfu/fill-stat/config/tokens.json"
 
 [accessor]
-    raw_urls = ["http://13.231.215.33:8545"]
+    raw_urls = ["http://******:8545"]
     fetch_tx_retry_count = 120
 
 [loopring_protocol]
