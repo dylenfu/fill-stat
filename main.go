@@ -90,8 +90,8 @@ func main() {
 		log.Infof("extractor,contract event name:%s -> key:%s", transferEvent.Name, transferEvent.Id.Hex())
 	}
 
-	// stat(&globalConfig.Item)
-	fullFillRingMinedata()
+	stat(&globalConfig.Item)
+	//fullFillRingMinedata()
 }
 
 // id <= 688, status, gas,gasused,gasprice
